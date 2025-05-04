@@ -1,0 +1,271 @@
+#
+# more detailed information about this file can be found here:
+# https://github.com/jsmit257/cffc-web/master/standalone/README.md
+#
+---
+x-pg-host: &pghost huautla
+x-pg-port: &pgport 5432
+x-pg-user: &pguser postgres
+x-pg-pass: &pgpass root
+x-pg-ssl: &pgssl disable
+
+x-api-host: &apihost cffc-api
+x-api-port: &apiport 8080
+
+x-usdb-host: &usdb-host usdb
+x-usdb-port: &usdb-port 3306
+x-usdb-user: &usdb-user root
+x-usdb-pass: &usdb-pass root
+
+x-usredis-host: &usredis-host usredis
+x-usredis-port: &usredis-port 6379
+# x-redis-user: &redis-user redis
+# x-redis-pass: &redis-pass redis
+
+x-ussrv-host: &ussrv-host ussrv
+x-ussrv-port: &ussrv-port 80
+x-authn-path: &authn-path /authnz/valid
+
+x-usweb-host: &usweb-host usweb
+x-usweb-port: &usweb-port 80
+
+x-maild-host: &maild-host usmail
+x-maild-port: &maild-port 25
+
+services:
+  huautla:
+    # usage: docker-compose up --remove-orphans -d huautla-standalone
+    #
+    # *but* you shouldn't ever really need to run this manually; it gets
+    # started by cffc-standalone; you could disable port forwarding unless
+    # you think you'll be poking around the SQL from a local client
+    #
+    # either way, try to remember to:
+    #
+    # $ docker-compose down --remove-orphans
+    #
+    # when you're done with it
+    image: postgres:bookworm
+    restart: always
+    hostname: *pghost
+    ports:
+      - 5436:5432
+    volumes:
+      - ./_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: *pgpass
+    #entrypoint: chown -Rv postgres:postgres /var/lib/postgresql
+
+  us-authn:
+    # handles login token management; there's still no compelling 
+    # argument for saving redis' state, worst case is an extra,
+    # unexpected call to login
+    image: redis:bookworm
+    restart: always
+    hostname: *usredis-host
+
+  us-db:
+    image: percona:ps-8.0.36-28
+    restart: always
+    hostname: *usdb-host
+    volumes:
+      - "./authn-data:/var/lib/mysql"
+    environment:
+      MYSQL_ROOT_PASSWORD: *usdb-pass
+
+  # us-maild:
+  #   image: bytemark/smtp
+  #   restart: always
+  #   hostname: *maild-host
+  #   env_file:
+  #     - ./bin/env/template
+  #     - ./bin/env/system
+
+  us-srv:
+    depends_on:
+      - us-authn
+      - us-db
+      # - us-maild
+    image: jsmit257/us-srv-mysql:lkg
+    hostname: *ussrv-host
+    restart: always
+    env_file:
+      - ./bin/env/template
+      - ./bin/env/system
+    environment:
+      US_MAILD_HOST: *maild-host
+      US_MAILD_PORT: *maild-port
+      US_MYSQL_HOST: *usdb-host
+      US_MYSQL_PORT: *usdb-port
+      US_MYSQL_USER: *usdb-user
+      US_MYSQL_PASSWORD: *usdb-pass
+      US_HTTP_HOST: *ussrv-host
+      US_HTTP_PORT: *ussrv-port
+      US_REDIS_HOST: *usredis-host
+      US_REDIS_PORT: *usredis-port
+      # US_REDIS_USER: *usredis-user
+      # US_REDIS_PASS: *usredis-pass
+      US_EMAIL_TEST_SEND: true
+      US_SMS_TEST_MODE: true
+
+  us-web:
+    depends_on:
+      - us-srv
+    image: jsmit257/us-web:lkg
+    hostname: *usweb-host
+    restart: always
+    volumes:
+      - ./nginx/custom:/www/css
+    environment:
+      US_HTTP_HOST: *ussrv-host
+      US_HTTP_PORT: *ussrv-port
+
+  cffc-api:
+    # usage: docker-compose up --remove-orphans -d cffc-api
+    #
+    # that's all there is to it; check that the host port isn't being
+    # used by anybody (docker-compose will tell you if it is) then http
+    # to it on localhost, or any interface on the host
+    #
+    # NB: the HUAUTLA_* environment variables could connect to any postgres
+    # server, but the huautla-standalone will still be started
+    #
+    # the normal PSA: please try to shut down cleanly with:
+    # $ docker-compose down --remove-orphans
+    #
+    depends_on:
+      - *pghost
+      - us-srv
+    image: jsmit257/cffc:lkg
+    restart: always
+    hostname: *apihost
+    volumes:
+      - ./album:/album
+    environment:
+      HUAUTLA_HOST: *pghost
+      HUAUTLA_PORT: *pgport
+      HUAUTLA_USER: *pguser
+      HUAUTLA_PASSWORD: *pgpass
+      HUAUTLA_SSL: *pgssl
+      HTTP_HOST: *apihost
+      HTTP_PORT: *apiport
+      AUTHN_HOST: *ussrv-host
+      AUTHN_PORT: *ussrv-port
+      AUTHN_PATH: *authn-path
+      GOCOVERDIR: /tmp
+
+  cffc-web:
+    # usage: docker-compose up --remove-orphans -d cffc-web
+    #
+    # put a file called `image.png` in the `background` folder in this 
+    # directory and it will be used on the site; no need to restart this 
+    # service, just refresh the page
+    #
+    depends_on: 
+		  - *apihost
+			- us-web
+    image: jsmit257/cffc-web:lkg
+    restart: always
+    hostname: cffc-web
+    ports: 
+		  - 8082:80
+			- 8043:443
+    volumes:
+      - ./background:/www/css/images/background
+      - ./album:/album
+    environment:
+      CFFC_API_HOST: *apihost
+      CFFC_API_PORT: *apiport
+      AUTHN_HOST: *ussrv-host
+      AUTHN_PORT: *ussrv-port
+      US_WEB_HOST: *usweb-host
+      US_WEB_PORT: *usweb-port
+      SSL_HOST: localhost
+      SSL_PORT: 8444
+
+  source:
+    # usage: don't, used by migration for a one time install
+    image: jsmit257/huautla:lkg
+    restart: always
+    hostname: huautla-source
+    environment:
+      POSTGRES_PASSWORD: *pgpass
+
+  migration:
+    # usage (2 separate commands): 
+    #
+    # $ docker-compose up --remove-orphans migration
+    # $ docker-compose down --remove-orphans
+    #
+    # creates a persistent store for huautla data on the host filesystem so 
+    # changes aren't lost between restarts; only run this once for a fresh
+    # install (although you could start as many fresh installs as you like);
+    #
+    # it creates a '_data/' directory for durable storage, but it fails if one
+    # already exists; if you're willing to lose everything in the database and
+    # start from scratch, then delete the '_data/' directory and try again;
+    # otherwise, consider the `restore:` service, assuming there are backups
+    depends_on: [ source ]
+    image: jsmit257/huautla:lkg
+    hostname: huautla-migration
+    volumes:
+      - ./_data:/var/lib/postgresql/data
+    environment:
+      SOURCE_HOST: huautla-source
+      SOURCE_USER: postgres
+      POSTGRES_PASSWORD: *pgpass
+    entrypoint: /migration-entrypoint.sh
+
+  backup:
+    # usage: docker-compose up --remove-orphans backup
+    #
+    # this is fine to run against a live server; it leaves an archive in the 
+    # host's `backups` directory; use the archive to restore an errant database
+    # to some other point in time using the `restore:` service
+    #
+    # it would be a very good idea(tm) to schedule this to run periodically,
+    # and perhaps wipe old archives while we're at it; it would also be good 
+    # to ship the archives elsewhere in case of hardware failure
+    depends_on: [ *pghost ]
+    image: jsmit257/huautla:lkg
+    hostname: huautla-backup
+    volumes:
+      - ./backups:/pgbackup
+    environment:
+      SOURCE_HOST: *pghost
+      SOURCE_USER: *pguser
+      POSTGRES_PASSWORD: *pgpass
+    entrypoint: /backup-entrypoint.sh
+
+  restore:
+    # usage: RESTORE_POINT=<archive> docker-compose up --remove-orphans restore
+    #
+    # restores the specified database to the state contained in <archive>;
+    # you can find archives in the host directory called 'backups/'; the 
+    # filenames are modified ISO timestamps like YYYYmmDDT..., meaning 
+    # year/month/day/..., so you can sort by name descending and get the 
+    # latest archive names at the top, or choose an earlier one before any
+    # corruption happened; for convenience, the most recent backup is symlinked
+    # to the file named 'latest'
+    depends_on: [ *pghost ]
+    image: jsmit257/huautla:lkg
+    hostname: huautla-restore
+    volumes:
+      - ./backups:/pgbackup
+    environment:
+      DEST_HOST: *pghost
+      DEST_USER: *pguser
+      RESTORE_POINT: ${RESTORE_POINT}
+      POSTGRES_PASSWORD: *pgpass
+    entrypoint: /restore-entrypoint.sh
+
+  mysql-migration:
+    image: jsmit257/us-db-mysql-mig:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.mysql
+      target: migration
+    volumes:
+      - "./authn-data:/var/lib/mysql"
+    entrypoint: /var/lib/mysql-files/install-userservice.sh mysqld
+    #entrypoint: chown -Rv mysql:mysql /var/lib/mysql
