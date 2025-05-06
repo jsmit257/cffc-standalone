@@ -1,0 +1,81 @@
+#!/bin/sh
+#
+# declare all the variables here for reference, but don't define
+# any secrets (e.g. passwords, auth tokens, etc); store secrets in
+# a separate secrets file in this directory which is ignored by 
+# source control
+#
+
+# postgres root configuration
+POSTGRES_PASSWORD=
+
+# mysql root password; may not be the same as US_MYSQL_PASSWORD
+MYSQL_ROOT_PASSWORD=
+
+# ussrv and usweb configuration
+US_MYSQL_HOST=usdb
+US_MYSQL_PORT=3306
+US_MYSQL_USER=root
+US_MYSQL_PASSWORD=
+
+US_REDIS_HOST=usauthn
+US_REDIS_PORT=6379
+# US_REDIS_USER=redis
+# US_REDIS_PASS=
+
+US_HTTP_HOST=ussrv
+US_HTTP_PORT=80
+
+US_MAILD_HOST=usmaild
+US_MAILD_PORT=25
+US_MAILD_SENDER=no-reply@cffc.io
+
+US_SMS_ACCT_ID=
+US_SMS_AUTH_TOKEN=
+US_SMS_SENDER=no-reply@cffc.io
+
+US_EMAIL_TEST_SEND=true
+US_SMS_TEST_MODE=true
+
+# cffc-api configuration
+CFFC_HUAUTLA_HOST=huautla
+CFFC_HUAUTLA_PORT=5432
+CFFC_HUAUTLA_USER=postgres
+CFFC_HUAUTLA_PASSWORD=
+CFFC_HUAUTLA_SSL=disable
+
+CFFC_HTTP_HOST=cffc-api
+CFFC_HTTP_PORT=80
+
+CFFC_AUTHN_HOST="${US_HTTP_HOST}"
+CFFC_AUTHN_PORT=$US_HTTP_PORT
+CFFC_AUTHN_PATH=/authnz/valid
+
+# cffc-web configuration
+#{CFFC,US}_HTTP_{HOST,PORT} are defined in their service configs
+US_WEB_HOST=usweb
+US_WEB_PORT=80
+# FIXME: explain this
+SSL_HOST=localhost
+SSL_PORT=10443
+
+# huautla-migration configuration
+HUAUTLA_MIG_SOURCE_HOST=huautla-source
+HUAUTLA_MIG_SOURCE_POST=5432
+HUAUTLA_MIG_SOURCE_USER=postgres
+HUAUTLA_MIG_DEST_HOST=localhost
+HUAUTLA_MIG_DEST_PORT=5432
+HUAUTLA_MIG_DEST_USER=postgres
+
+# huautla-backup configuration
+HUAUTLA_BACKUP_SOURCE_HOST=huautla-source
+HUAUTLA_BACKUP_SOURCE_POST=5432
+HUAUTLA_BACKUP_SOURCE_USER=postgres
+
+# huautla-restore configuration
+HUAUTLA_RESTORE_DEST_HOST=huautla-source
+HUAUTLA_RESTORE_DEST_PORT=5432
+HUAUTLA_RESTORE_DEST_USER=postgres
+
+# shared by huautla-backup/-restore
+HUAUTLA_BACKUP_RESTORE_DIR=/pgbackup

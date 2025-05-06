@@ -1,271 +1,247 @@
 #
 # more detailed information about this file can be found here:
-# https://github.com/jsmit257/cffc-web/master/standalone/README.md
+# https://github.com/jsmit257/cffc-standalone/master/README.md
 #
 ---
-x-pg-host: &pghost huautla
-x-pg-port: &pgport 5432
-x-pg-user: &pguser postgres
-x-pg-pass: &pgpass root
-x-pg-ssl: &pgssl disable
-
-x-api-host: &apihost cffc-api
-x-api-port: &apiport 8080
-
-x-usdb-host: &usdb-host usdb
-x-usdb-port: &usdb-port 3306
-x-usdb-user: &usdb-user root
-x-usdb-pass: &usdb-pass root
-
-x-usredis-host: &usredis-host usredis
-x-usredis-port: &usredis-port 6379
-# x-redis-user: &redis-user redis
-# x-redis-pass: &redis-pass redis
-
-x-ussrv-host: &ussrv-host ussrv
-x-ussrv-port: &ussrv-port 80
-x-authn-path: &authn-path /authnz/valid
-
-x-usweb-host: &usweb-host usweb
-x-usweb-port: &usweb-port 80
-
-x-maild-host: &maild-host usmail
-x-maild-port: &maild-port 25
 
 services:
+
   huautla:
-    # usage: docker-compose up --remove-orphans -d huautla-standalone
     #
-    # *but* you shouldn't ever really need to run this manually; it gets
-    # started by cffc-standalone; you could disable port forwarding unless
-    # you think you'll be poking around the SQL from a local client
+    # a standalone postgres server that stores production data on a 
+    # volume mount; use the migration service to initialize it for the
+    # first run, and backup/restore services for routine maintenance 
+    # and disaster recovery
     #
-    # either way, try to remember to:
+    # you should disable port forwarding unless you think you'll be 
+    # poking around the SQL from a local client
     #
-    # $ docker-compose down --remove-orphans
-    #
-    # when you're done with it
     image: postgres:bookworm
     restart: always
-    hostname: *pghost
-    ports:
-      - 5436:5432
-    volumes:
-      - ./_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_PASSWORD: *pgpass
+    hostname: huautla
+    # ports: [ 5436:5432 ]
+    volumes: [ "./huautla-data:/var/lib/postgresql/data" ]
+    env_file: [ ./env/secrets ]
+    # FIXME: is this handled on startup, yet?
     #entrypoint: chown -Rv postgres:postgres /var/lib/postgresql
 
   us-authn:
-    # handles login token management; there's still no compelling 
-    # argument for saving redis' state, worst case is an extra,
-    # unexpected call to login
+    #
+    # handles login and password reset management tokens; there's no 
+    # compelling argument for saving redis' state; the worst case from
+    # losing this service is a user has to re-login or re-request a 
+    # password reset; we don't currently enable any security
+    #
     image: redis:bookworm
     restart: always
-    hostname: *usredis-host
+    hostname: usauthn
 
   us-db:
+    #
+    # a standalone mysql server for authentication/authorization data
+    # stored on a volume mount since this data needs to be preserved 
+    # across restarts
+    #
     image: percona:ps-8.0.36-28
     restart: always
-    hostname: *usdb-host
-    volumes:
-      - "./authn-data:/var/lib/mysql"
-    environment:
-      MYSQL_ROOT_PASSWORD: *usdb-pass
+    hostname: usdb
+    volumes: [ "./authnz-data:/var/lib/mysql" ]
+    env_file: [ ./env/secrets ]
 
-  # us-maild:
-  #   image: bytemark/smtp
-  #   restart: always
-  #   hostname: *maild-host
-  #   env_file:
-  #     - ./bin/env/template
-  #     - ./bin/env/system
+  us-maild:
+    #
+    # a proxy smtp server used by us-srv when servicing a password
+    # reset through email
+    #
+    image: bytemark/smtp
+    restart: always
+    hostname: usmaild
+    env_file:
+      - ./env/template
+      - ./env/secrets
 
   us-srv:
+    #
+    # an api server that coordinates authentication/authorization 
+    # data from us-db and login management services from us-authn;
+    # it exports a single library function for use by the cffc-api 
+    # service to check each inbound request is authorized; a failure
+    # response includes a Location to a login module hosted on the 
+    # us-web service
+    #
     depends_on:
-      - us-authn
       - us-db
-      # - us-maild
+      - us-authn
+      - us-maild
     image: jsmit257/us-srv-mysql:lkg
-    hostname: *ussrv-host
+    hostname: ussrv
     restart: always
     env_file:
-      - ./bin/env/template
-      - ./bin/env/system
-    environment:
-      US_MAILD_HOST: *maild-host
-      US_MAILD_PORT: *maild-port
-      US_MYSQL_HOST: *usdb-host
-      US_MYSQL_PORT: *usdb-port
-      US_MYSQL_USER: *usdb-user
-      US_MYSQL_PASSWORD: *usdb-pass
-      US_HTTP_HOST: *ussrv-host
-      US_HTTP_PORT: *ussrv-port
-      US_REDIS_HOST: *usredis-host
-      US_REDIS_PORT: *usredis-port
-      # US_REDIS_USER: *usredis-user
-      # US_REDIS_PASS: *usredis-pass
-      US_EMAIL_TEST_SEND: true
-      US_SMS_TEST_MODE: true
+      - ./env/template
+      - ./env/secrets
 
   us-web:
-    depends_on:
-      - us-srv
+    #
+    # hosts the login page on a standalone nginx server; this is only 
+    # visible when proxied through cffc-web so all resources are rooted
+    # in the same domain; this isn't technically necessary, but it makes
+    # client-facing resource management easier
+    #
+    depends_on: [ us-srv ]
     image: jsmit257/us-web:lkg
-    hostname: *usweb-host
+    hostname: usweb
     restart: always
-    volumes:
-      - ./nginx/custom:/www/css
-    environment:
-      US_HTTP_HOST: *ussrv-host
-      US_HTTP_PORT: *ussrv-port
+    volumes: [ ./usweb/css:/www/css ]
+    env_file: [ ./env/template ]
 
   cffc-api:
-    # usage: docker-compose up --remove-orphans -d cffc-api
     #
-    # that's all there is to it; check that the host port isn't being
-    # used by anybody (docker-compose will tell you if it is) then http
-    # to it on localhost, or any interface on the host
-    #
-    # NB: the HUAUTLA_* environment variables could connect to any postgres
-    # server, but the huautla-standalone will still be started
-    #
-    # the normal PSA: please try to shut down cleanly with:
-    # $ docker-compose down --remove-orphans
+    # serves all the client api's for managing the huautla database;
+    # these are made public through the cffc-web service
     #
     depends_on:
-      - *pghost
+      - huautla
       - us-srv
     image: jsmit257/cffc:lkg
     restart: always
-    hostname: *apihost
-    volumes:
-      - ./album:/album
+    hostname: cffc-api
+    volumes: [ ./album:/album ]
+    env_file:
+      - ./env/template
+      - ./env/secrets
     environment:
-      HUAUTLA_HOST: *pghost
-      HUAUTLA_PORT: *pgport
-      HUAUTLA_USER: *pguser
-      HUAUTLA_PASSWORD: *pgpass
-      HUAUTLA_SSL: *pgssl
-      HTTP_HOST: *apihost
-      HTTP_PORT: *apiport
-      AUTHN_HOST: *ussrv-host
-      AUTHN_PORT: *ussrv-port
-      AUTHN_PATH: *authn-path
       GOCOVERDIR: /tmp
 
   cffc-web:
-    # usage: docker-compose up --remove-orphans -d cffc-web
     #
-    # put a file called `image.png` in the `background` folder in this 
-    # directory and it will be used on the site; no need to restart this 
-    # service, just refresh the page
+    # hosts the static resources for the client huautla interface, proxies
+    # requests for the cffc-api server, and prozies the entire userservice
+    # application under the path `/authnz`
     #
-    depends_on: 
-		  - *apihost
-			- us-web
+    depends_on:
+      - cffc-api
+      - us-web
     image: jsmit257/cffc-web:lkg
     restart: always
     hostname: cffc-web
-    ports: 
-		  - 8082:80
-			- 8043:443
+    ports:
+      - 10080:80
+      - 10443:443
     volumes:
       - ./background:/www/css/images/background
       - ./album:/album
-    environment:
-      CFFC_API_HOST: *apihost
-      CFFC_API_PORT: *apiport
-      AUTHN_HOST: *ussrv-host
-      AUTHN_PORT: *ussrv-port
-      US_WEB_HOST: *usweb-host
-      US_WEB_PORT: *usweb-port
-      SSL_HOST: localhost
-      SSL_PORT: 8444
+    env_file:
+      - ./env/template
+      - ./env/secrets
 
-  source:
-    # usage: don't, used by migration for a one time install
+  huautla-source:
+    #
+    # provides the seed data to initialize a new huautla instance; this 
+    # service is started by huautla-initialization and should be shutdown 
+    # when initialization is finished running
+    #
     image: jsmit257/huautla:lkg
     restart: always
     hostname: huautla-source
-    environment:
-      POSTGRES_PASSWORD: *pgpass
+    env_file: [ ./env/secrets ]
 
-  migration:
-    # usage (2 separate commands): 
-    #
-    # $ docker-compose up --remove-orphans migration
-    # $ docker-compose down --remove-orphans
+  huautla-initialization:
     #
     # creates a persistent store for huautla data on the host filesystem so 
     # changes aren't lost between restarts; only run this once for a fresh
     # install (although you could start as many fresh installs as you like);
     #
-    # it creates a '_data/' directory for durable storage, but it fails if one
-    # already exists; if you're willing to lose everything in the database and
-    # start from scratch, then delete the '_data/' directory and try again;
-    # otherwise, consider the `restore:` service, assuming there are backups
-    depends_on: [ source ]
+    # it attatches to the same volume used by the huautla service and thus,
+    # should not be running at the same time as huautla; once seeded, you won't
+    # need to run this service ever again
+    #
+    depends_on: [ huautla-source ]
     image: jsmit257/huautla:lkg
-    hostname: huautla-migration
-    volumes:
-      - ./_data:/var/lib/postgresql/data
-    environment:
-      SOURCE_HOST: huautla-source
-      SOURCE_USER: postgres
-      POSTGRES_PASSWORD: *pgpass
+    hostname: huautla-initialization
+    volumes: [ "./huautla-data:/var/lib/postgresql/data" ]
+    env_file:
+      - ./env/template
+      - ./env/secrets
     entrypoint: /migration-entrypoint.sh
 
-  backup:
-    # usage: docker-compose up --remove-orphans backup
+  huautla-backup:
     #
     # this is fine to run against a live server; it leaves an archive in the 
-    # host's `backups` directory; use the archive to restore an errant database
-    # to some other point in time using the `restore:` service
+    # host's `huautla-backups` directory; use the archive to restore an errant 
+    # database to some other point in time using huautla-restore
     #
-    # it would be a very good idea(tm) to schedule this to run periodically,
+    # backup and restore *connect* to the live service, unlike huautla-initialization
+    # that runs once *instead of* the live service, so they needs no `.../data/` 
+    # volume
+    #
+    # it would be a very good idea™ to schedule this to run periodically,
     # and perhaps wipe old archives while we're at it; it would also be good 
-    # to ship the archives elsewhere in case of hardware failure
-    depends_on: [ *pghost ]
+    # to ship the archives elsewhere in case of local hardware failure
+    #
+    depends_on:
+      - huautla
     image: jsmit257/huautla:lkg
     hostname: huautla-backup
-    volumes:
-      - ./backups:/pgbackup
-    environment:
-      SOURCE_HOST: *pghost
-      SOURCE_USER: *pguser
-      POSTGRES_PASSWORD: *pgpass
+    volumes: [ "./huautla-backups:/pgbackup" ]
+    env_file:
+      - ./env/template
+      - ./env/secrets
     entrypoint: /backup-entrypoint.sh
 
-  restore:
-    # usage: RESTORE_POINT=<archive> docker-compose up --remove-orphans restore
+  huautla-restore:
     #
-    # restores the specified database to the state contained in <archive>;
-    # you can find archives in the host directory called 'backups/'; the 
-    # filenames are modified ISO timestamps like YYYYmmDDT..., meaning 
-    # year/month/day/..., so you can sort by name descending and get the 
-    # latest archive names at the top, or choose an earlier one before any
+    # usage: RESTORE_POINT=<archive> docker-compose up --remove-orphans huautla-restore
+    #
+    # restores the specified database to the state contained in <archive>; you
+    # can find archives in the host directory called 'huautla-backups/'; the 
+    # filenames are modified ISO timestamps like YYYYmmDDTHHMMSS, meaning 
+    # year/month/day/hour/minute/second, so you can sort by name descending and 
+    # get the latest archive names at the top, or choose an earlier one before any
     # corruption happened; for convenience, the most recent backup is symlinked
     # to the file named 'latest'
-    depends_on: [ *pghost ]
+    #
+    depends_on:
+      - huautla
     image: jsmit257/huautla:lkg
     hostname: huautla-restore
-    volumes:
-      - ./backups:/pgbackup
+    volumes: [ "./huautla-backups:/pgbackup" ]
+    env_file:
+      - ./env/template
+      - ./env/secrets
     environment:
-      DEST_HOST: *pghost
-      DEST_USER: *pguser
       RESTORE_POINT: ${RESTORE_POINT}
-      POSTGRES_PASSWORD: *pgpass
     entrypoint: /restore-entrypoint.sh
 
-  mysql-migration:
-    image: jsmit257/us-db-mysql-mig:latest
-    build:
-      context: .
-      dockerfile: Dockerfile.mysql
-      target: migration
-    volumes:
-      - "./authn-data:/var/lib/mysql"
+  userservice-initialization:
+    #
+    # works similarly to huautla-initialization, but it doesn't need seed data, so there's
+    # no corresponding huautla-source service; this image contains the initialization
+    # sql to build the database and leverages percona's default startup behavior to 
+    # run it; this only needs to run once
+    #
+    image: jsmit257/us-db-mysql-mig:lkg
+    volumes: [ "./authnz-data:/var/lib/mysql" ]
     entrypoint: /var/lib/mysql-files/install-userservice.sh mysqld
-    #entrypoint: chown -Rv mysql:mysql /var/lib/mysql
+    # entrypoint: chown -Rv mysql:mysql /var/lib/mysql
+
+  userservice-backup:
+    #
+    # TODO: implement this in the us-db-mysql-mig image
+    #
+    image: jsmit257/us-db-mysql-mig:lkg
+    volumes: [ "./authnz-backups:/authnz-backups" ]
+    env_file:
+      - ./env/template
+      - ./env/secrets
+    entrypoint: sleep 5m
+
+  userservice-restore:
+    #
+    # TODO: implement this in the us-db-mysql-mig image
+    #
+    image: alpine:edge #jsmit257/us-db-mysql-mig:lkg
+    volumes: [ "./authnz-backups:/authnz-backups" ]
+    env_file:
+      - ./env/template
+      - ./env/secrets
+    entrypoint: sleep 5m
