@@ -3,6 +3,9 @@
 # https://github.com/jsmit257/cffc-standalone/master/README.md
 #
 ---
+x-configs: &envs
+  - ./env/template
+  - ./env/secrets
 
 services:
 
@@ -13,17 +16,11 @@ services:
     # first run, and backup/restore services for routine maintenance 
     # and disaster recovery
     #
-    # you should disable port forwarding unless you think you'll be 
-    # poking around the SQL from a local client
-    #
     image: postgres:bookworm
     restart: always
     hostname: huautla
-    # ports: [ 5436:5432 ]
-    volumes: [ "./huautla-data:/var/lib/postgresql/data" ]
+    volumes: [ "./persistence/huautla/data:/var/lib/postgresql/data" ]
     env_file: [ ./env/secrets ]
-    # FIXME: is this handled on startup, yet?
-    #entrypoint: chown -Rv postgres:postgres /var/lib/postgresql
 
   us-authn:
     #
@@ -40,12 +37,13 @@ services:
     #
     # a standalone mysql server for authentication/authorization data
     # stored on a volume mount since this data needs to be preserved 
-    # across restarts
+    # across restarts; use the us-initialization service to seed this
+    # for a new install
     #
     image: percona:ps-8.0.36-28
     restart: always
     hostname: usdb
-    volumes: [ "./authnz-data:/var/lib/mysql" ]
+    volumes: [ "./persistence/authnz/data:/var/lib/mysql" ]
     env_file: [ ./env/secrets ]
 
   us-maild:
@@ -56,9 +54,7 @@ services:
     image: bytemark/smtp
     restart: always
     hostname: usmaild
-    env_file:
-      - ./env/template
-      - ./env/secrets
+    env_file: *envs
 
   us-srv:
     #
@@ -74,11 +70,9 @@ services:
       - us-authn
       - us-maild
     image: jsmit257/us-srv-mysql:lkg
-    hostname: ussrv
     restart: always
-    env_file:
-      - ./env/template
-      - ./env/secrets
+    hostname: ussrv
+    env_file: *envs
 
   us-web:
     #
@@ -89,9 +83,9 @@ services:
     #
     depends_on: [ us-srv ]
     image: jsmit257/us-web:lkg
-    hostname: usweb
     restart: always
-    volumes: [ ./usweb/css:/www/css ]
+    hostname: usweb
+    volumes: [ ./www/css:/www/css ] # add a volume for /www/js if you have custom javascript
     env_file: [ ./env/template ]
 
   cffc-api:
@@ -104,18 +98,15 @@ services:
       - us-srv
     image: jsmit257/cffc:lkg
     restart: always
-    hostname: cffc-api
+    hostname: cffcapi
     volumes: [ ./album:/album ]
-    env_file:
-      - ./env/template
-      - ./env/secrets
-    environment:
-      GOCOVERDIR: /tmp
+    env_file: *envs
+    environment: { GOCOVERDIR: /tmp }
 
   cffc-web:
     #
     # hosts the static resources for the client huautla interface, proxies
-    # requests for the cffc-api server, and prozies the entire userservice
+    # requests for the cffc-api server, and proxies the entire userservice
     # application under the path `/authnz`
     #
     depends_on:
@@ -123,16 +114,14 @@ services:
       - us-web
     image: jsmit257/cffc-web:lkg
     restart: always
-    hostname: cffc-web
+    hostname: cffcweb
     ports:
       - 10080:80
       - 10443:443
     volumes:
-      - ./background:/www/css/images/background
+      - ./www/css/images/background:/www/css/images/background
       - ./album:/album
-    env_file:
-      - ./env/template
-      - ./env/secrets
+    env_file: *envs
 
   huautla-source:
     #
@@ -158,34 +147,29 @@ services:
     depends_on: [ huautla-source ]
     image: jsmit257/huautla:lkg
     hostname: huautla-initialization
-    volumes: [ "./huautla-data:/var/lib/postgresql/data" ]
-    env_file:
-      - ./env/template
-      - ./env/secrets
-    entrypoint: /migration-entrypoint.sh
+    volumes: [ "./persistence/huautla/data:/var/lib/postgresql/data" ]
+    env_file: *envs
+    entrypoint: sh -c "chown -Rv postgres:postgres /var/lib/postgresql && /migration-entrypoint.sh"
 
   huautla-backup:
     #
     # this is fine to run against a live server; it leaves an archive in the 
-    # host's `huautla-backups` directory; use the archive to restore an errant 
-    # database to some other point in time using huautla-restore
+    # host's `persistence/huautla/backups` directory; use the archive to restore 
+    # an errant database to some other point in time using huautla-restore
     #
-    # backup and restore *connect* to the live service, unlike huautla-initialization
-    # that runs once *instead of* the live service, so they needs no `.../data/` 
-    # volume
+    # backup and restore need no `.../data/` volume ebcause they *connect* to 
+    # the live service, unlike initialization that runs once *instead of* the 
+    # live service
     #
     # it would be a very good idea™ to schedule this to run periodically,
     # and perhaps wipe old archives while we're at it; it would also be good 
     # to ship the archives elsewhere in case of local hardware failure
     #
-    depends_on:
-      - huautla
+    depends_on: [ huautla ]
     image: jsmit257/huautla:lkg
     hostname: huautla-backup
-    volumes: [ "./huautla-backups:/pgbackup" ]
-    env_file:
-      - ./env/template
-      - ./env/secrets
+    volumes: [ "./persistence/huautla/backups:/pgbackup" ]
+    env_file: *envs
     entrypoint: /backup-entrypoint.sh
 
   huautla-restore:
@@ -194,54 +178,49 @@ services:
     #
     # restores the specified database to the state contained in <archive>; you
     # can find archives in the host directory called 'huautla-backups/'; the 
-    # filenames are modified ISO timestamps like YYYYmmDDTHHMMSS, meaning 
+    # filenames are modified ISO timestamps like YYYYmmDDTHHMMSS, i.e:
     # year/month/day/hour/minute/second, so you can sort by name descending and 
     # get the latest archive names at the top, or choose an earlier one before any
     # corruption happened; for convenience, the most recent backup is symlinked
     # to the file named 'latest'
     #
-    depends_on:
-      - huautla
+    depends_on: [ huautla ]
     image: jsmit257/huautla:lkg
     hostname: huautla-restore
-    volumes: [ "./huautla-backups:/pgbackup" ]
-    env_file:
-      - ./env/template
-      - ./env/secrets
-    environment:
-      RESTORE_POINT: ${RESTORE_POINT}
+    volumes: [ "./persistence/huautla/backups:/pgbackup" ]
+    env_file: *envs
+    environment: { RESTORE_POINT: $RESTORE_POINT }
     entrypoint: /restore-entrypoint.sh
 
-  userservice-initialization:
+  us-initialization:
     #
-    # works similarly to huautla-initialization, but it doesn't need seed data, so there's
-    # no corresponding huautla-source service; this image contains the initialization
-    # sql to build the database and leverages percona's default startup behavior to 
-    # run it; this only needs to run once
+    # works similarly to huautla-initialization, but it doesn't need seed data, 
+    # so there's no corresponding huautla-source service; this image contains 
+    # the initialization sql to build the database and leverages percona's default 
+    # startup behavior to run it; this only needs to run once
     #
     image: jsmit257/us-db-mysql-mig:lkg
-    volumes: [ "./authnz-data:/var/lib/mysql" ]
-    entrypoint: /var/lib/mysql-files/install-userservice.sh mysqld
-    # entrypoint: chown -Rv mysql:mysql /var/lib/mysql
+    hostname: us-initialization
+    volumes: [ "./persistence/authnz/data:/var/lib/mysql" ]
+    # the same chown command works for huautla-initialize, why not here?
+    entrypoint: sh -c "chown -Rv mysql:mysql /var/lib/mysql && /var/lib/mysql-files/install-userservice.sh mysqld"
 
-  userservice-backup:
+  us-backup:
     #
     # TODO: implement this in the us-db-mysql-mig image
     #
     image: jsmit257/us-db-mysql-mig:lkg
-    volumes: [ "./authnz-backups:/authnz-backups" ]
-    env_file:
-      - ./env/template
-      - ./env/secrets
+    hostname: us-backup
+    volumes: [ "./persistence/authnz/backups:/authnz-backups" ]
+    env_file: *envs
     entrypoint: sleep 5m
 
-  userservice-restore:
+  us-restore:
     #
     # TODO: implement this in the us-db-mysql-mig image
     #
-    image: alpine:edge #jsmit257/us-db-mysql-mig:lkg
-    volumes: [ "./authnz-backups:/authnz-backups" ]
-    env_file:
-      - ./env/template
-      - ./env/secrets
+    image: jsmit257/us-db-mysql-mig:lkg
+    hostname: us-restore
+    volumes: [ "./persistence/authnz/backups:/authnz-backups" ]
+    env_file: *envs
     entrypoint: sleep 5m
