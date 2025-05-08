@@ -202,25 +202,35 @@ services:
     image: jsmit257/us-db-mysql-mig:lkg
     hostname: us-initialization
     volumes: [ "./persistence/authnz/data:/var/lib/mysql" ]
-    # the same chown command works for huautla-initialize, why not here?
+    # XXX: the same chown command works for huautla-initialize, why not here?
+    # have to `chown 1001:1001 persistence/authnz/backups` manually, for now
     entrypoint: sh -c "chown -Rv mysql:mysql /var/lib/mysql && /var/lib/mysql-files/install-userservice.sh mysqld"
 
   us-backup:
     #
-    # TODO: implement this in the us-db-mysql-mig image
+    # creates a mysql script to drop existing tables and recreate them, then 
+    # insert all the data that existed at the time the backup ran; it does not
+    # drop/create the database or any users, permissions, etc, and will *not* 
+    # drop tables created since the backup was created; output file is zipped 
+    # and symlinked to `latest` for convenience
     #
+    depends_on: [ us-db ]
     image: jsmit257/us-db-mysql-mig:lkg
     hostname: us-backup
-    volumes: [ "./persistence/authnz/backups:/authnz-backups" ]
+    volumes: [ "./persistence/authnz/backups:/mysqlbackup" ]
     env_file: *envs
-    entrypoint: sleep 5m
+    # XXX: still have to `chown 1001:1001 persistence/authnz/backups` before this 
+    # will work, for now; only needs to be done once
+    entrypoint: /mysql-backup.sh
 
   us-restore:
     #
-    # TODO: implement this in the us-db-mysql-mig image
+    # send a backup script created by `us-backup` as described above to the 
+    # persistent userservice database
     #
     image: jsmit257/us-db-mysql-mig:lkg
     hostname: us-restore
-    volumes: [ "./persistence/authnz/backups:/authnz-backups" ]
+    volumes: [ "./persistence/authnz/backups:/mysqlbackup" ]
     env_file: *envs
-    entrypoint: sleep 5m
+    # XXX: assuming you already ran `chown ...` to create a backup
+    entrypoint: /mysql-restore.sh

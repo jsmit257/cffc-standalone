@@ -14,6 +14,11 @@ POSTGRES_PASSWORD=
 # mysql root password; may not be the same as US_MYSQL_PASSWORD
 MYSQL_ROOT_PASSWORD=
 
+# maild configurations
+MAILD_RELAY_HOST=mail.google.com
+MAILD_RELAY_PORT=587
+# MAILD_ user/pass/keys/tokens???
+
 # ussrv and usweb configuration
 US_MYSQL_HOST=usdb
 US_MYSQL_PORT=3306
@@ -57,7 +62,7 @@ CFFC_AUTHN_PATH=/authnz/valid
 US_WEB_HOST=usweb
 US_WEB_PORT=80
 # FIXME: explain this
-SSL_HOST=127.0.0.1
+SSL_HOST=localhost
 SSL_PORT=10443
 
 # huautla-migration configuration
@@ -80,3 +85,19 @@ HUAUTLA_RESTORE_DEST_USER=postgres
 
 # shared by huautla-backup/-restore
 HUAUTLA_BACKUP_RESTORE_DIR=/pgbackup
+
+# us-backup configuration
+USERSERVICE_BACKUP_SOURCE_HOST=us-db
+USERSERVICE_BACKUP_SOURCE_PORT=3306
+USERSERVICE_BACKUP_SOURCE_USER=root
+USERSERVICE_BACKUP_SOURCE_PASS=
+
+# us-restore configuration
+USERSERVICE_RESTORE_DEST_HOST=us-db
+USERSERVICE_RESTORE_DEST_PORT=3306
+USERSERVICE_RESTORE_DEST_USER=root
+USERSERVICE_RESTORE_DEST_PASS=
+
+# shared by huautla-backup/-restore
+USERSERVICE_BACKUP_RESTORE_DIR=/mysqlbackup
+
