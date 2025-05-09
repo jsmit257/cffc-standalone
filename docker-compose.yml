@@ -1,8 +1,9 @@
 #
 # more detailed information about this file can be found here:
-# https://github.com/jsmit257/cffc-standalone/master/README.md
+# https://github.com/jsmit257/cffc-standalone/blob/master/README.md
 #
 ---
+
 x-configs: &envs
   - ./env/template
   - ./env/secrets
@@ -37,7 +38,7 @@ services:
     #
     # a standalone mysql server for authentication/authorization data
     # stored on a volume mount since this data needs to be preserved 
-    # across restarts; use the us-initialization service to seed this
+    # across restarts; use the us-initialize service to seed this
     # for a new install
     #
     image: percona:ps-8.0.36-28
@@ -123,10 +124,17 @@ services:
       - ./album:/album
     env_file: *envs
 
+  #
+  # all the following services are for initialization and maintenance; it's 
+  # up to the user to schedule backups through whatever cron services 
+  # provided by your OS; restore's are run manually as documented in the
+  # README.md linked in the beginning of this file
+  #
+
   huautla-source:
     #
     # provides the seed data to initialize a new huautla instance; this 
-    # service is started by huautla-initialization and should be shutdown 
+    # service is started by huautla-initialize and should be shutdown 
     # when initialization is finished running
     #
     image: jsmit257/huautla:lkg
@@ -134,7 +142,7 @@ services:
     hostname: huautla-source
     env_file: [ ./env/secrets ]
 
-  huautla-initialization:
+  huautla-initialize:
     #
     # creates a persistent store for huautla data on the host filesystem so 
     # changes aren't lost between restarts; only run this once for a fresh
@@ -146,7 +154,7 @@ services:
     #
     depends_on: [ huautla-source ]
     image: jsmit257/huautla:lkg
-    hostname: huautla-initialization
+    hostname: huautla-initialize
     volumes: [ "./persistence/huautla/data:/var/lib/postgresql/data" ]
     env_file: *envs
     entrypoint: sh -c "chown -Rv postgres:postgres /var/lib/postgresql && /migration-entrypoint.sh"
@@ -192,16 +200,17 @@ services:
     environment: { RESTORE_POINT: $RESTORE_POINT }
     entrypoint: /restore-entrypoint.sh
 
-  us-initialization:
+  us-initialize:
     #
-    # works similarly to huautla-initialization, but it doesn't need seed data, 
+    # works similarly to huautla-initialize, but it doesn't need seed data, 
     # so there's no corresponding huautla-source service; this image contains 
     # the initialization sql to build the database and leverages percona's default 
     # startup behavior to run it; this only needs to run once
     #
     image: jsmit257/us-db-mysql-mig:lkg
-    hostname: us-initialization
+    hostname: us-initialize
     volumes: [ "./persistence/authnz/data:/var/lib/mysql" ]
+    env_file: [ ./env/secrets ]
     # XXX: the same chown command works for huautla-initialize, why not here?
     # have to `chown 1001:1001 persistence/authnz/backups` manually, for now
     entrypoint: sh -c "chown -Rv mysql:mysql /var/lib/mysql && /var/lib/mysql-files/install-userservice.sh mysqld"
@@ -228,9 +237,10 @@ services:
     # send a backup script created by `us-backup` as described above to the 
     # persistent userservice database
     #
+    depends_on: [ us-db ]
     image: jsmit257/us-db-mysql-mig:lkg
     hostname: us-restore
     volumes: [ "./persistence/authnz/backups:/mysqlbackup" ]
     env_file: *envs
-    # XXX: assuming you already ran `chown ...` to create a backup
+    # XXX: assuming you already ran `chown ...` to create backup(s)
     entrypoint: /mysql-restore.sh
