@@ -7,6 +7,7 @@
 x-configs: &envs
   - ./env/template
   - ./env/secrets
+x-album-vol: &photos "./album/:/album/"
 
 services:
 
@@ -71,6 +72,7 @@ services:
       - us-authn
       - us-maild
     image: jsmit257/us-srv-mysql:lkg
+    pull_policy: daily
     restart: always
     hostname: ussrv
     env_file: *envs
@@ -84,9 +86,12 @@ services:
     #
     depends_on: [ us-srv ]
     image: jsmit257/us-web:lkg
+    pull_policy: daily
     restart: always
     hostname: usweb
-    volumes: [ ./www/css:/www/css ] # add a volume for /www/js if you have custom javascript
+    # volumes: 
+    #   - ./www/css/:/www/css/
+    #   - ./www/js/:/www/js/
     env_file: [ ./env/template ]
 
   cffc-api:
@@ -98,9 +103,10 @@ services:
       - huautla
       - us-srv
     image: jsmit257/cffc:lkg
+    pull_policy: daily
     restart: always
     hostname: cffcapi
-    volumes: [ ./album:/album ]
+    volumes: [ *photos ]
     env_file: *envs
     environment: { GOCOVERDIR: /tmp }
 
@@ -114,14 +120,18 @@ services:
       - cffc-api
       - us-web
     image: jsmit257/cffc-web:lkg
+    pull_policy: daily
     restart: always
     hostname: cffcweb
     ports:
       - 10080:80
       - 10443:443
     volumes:
-      - ./www/css/images/background:/www/css/images/background
-      - ./album:/album
+      - ./www/css/images/background/:/www/css/images/background/
+      # - ./www/css/:/www/css/custom/
+      # - ./www/js/:/www/js/custom/
+      - *photos
+      # - ./www/certs/:/etc/nginx/certs/
     env_file: *envs
 
   #
@@ -138,6 +148,7 @@ services:
     # when initialization is finished running
     #
     image: jsmit257/huautla:lkg
+    pull_policy: daily
     restart: always
     hostname: huautla-source
     env_file: [ ./env/secrets ]
@@ -208,6 +219,7 @@ services:
     # startup behavior to run it; this only needs to run once
     #
     image: jsmit257/us-db-mysql-mig:lkg
+    pull_policy: daily
     hostname: us-initialize
     volumes: [ "./persistence/authnz/data:/var/lib/mysql" ]
     env_file: [ ./env/secrets ]
